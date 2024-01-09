@@ -1,0 +1,140 @@
+{
+  "Comment": "Re-create the Parquet-format table of CSB soundings",
+  "StartAt": "Drop Table",
+  "States": {
+    "Drop Table": {
+      "Comment": "Drop existing parquet-format table",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString.$": "States.Format('drop table if exists {}', $.globals.PARQUET_TABLE)",
+        "WorkGroup": "primary"
+      },
+      "Type": "Task",
+      "ResultSelector": {
+        "Status.$": "$.QueryExecution.Status"
+      },
+      "ResultPath": "$.TaskResult",
+      "Next": "DropTableSucceeded?"
+    },
+    "DropTableSucceeded?": {
+      "Comment": "Branch depending on success for query execution",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.TaskResult.Status.State",
+            "StringEquals": "SUCCEEDED"
+          },
+          "Next": "Notify Failure"
+        }
+      ],
+      "OutputPath": "$.globals",
+      "Default": "Delete Parquet Files"
+    },
+    "Notify Failure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "Message.$": "$",
+        "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email"
+      },
+      "Next": "QueryFailed",
+      "Comment": "Notify administrator of failure via email"
+    },
+    "QueryFailed": {
+      "Comment": "Query failed, terminate Step Function",
+      "Type": "Fail",
+      "Cause": "Athena Query Failed"
+    },
+    "Delete Parquet Files": {
+      "Comment": "remove the external parquet files used by the table",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:282856304593:function:deleteParquetFiles:$LATEST"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "OutputPath": "$.Payload.globals",
+      "Next": "Create Table Statement"
+    },
+    "Create Table Statement": {
+      "Comment": "Construct the SQL statement used to create new table",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "arn:aws:lambda:us-east-1:282856304593:function:constructCreateTableQueryString:$LATEST"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "QueryString.$": "$.Payload.QUERY_STRING",
+        "globals.$": "$.Payload.globals",
+        "StatusCode.$": "$.StatusCode"
+      },
+      "Next": "Create Table"
+    },
+    "Create Table": {
+      "Comment": "Execute the Create Table statement",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString.$": "$.QueryString",
+        "WorkGroup": "primary"
+      },
+      "ResultSelector": {
+        "Status.$": "$.QueryExecution.Status"
+      },
+      "ResultPath": "$.TaskResult",
+      "Next": "CreateTableSucceeded?"
+    },
+    "CreateTableSucceeded?": {
+      "Comment": "Branch depending on success for query execution",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.TaskResult.Status.State",
+            "StringEquals": "SUCCEEDED"
+          },
+          "Next": "QueryFailed"
+        }
+      ],
+      "OutputPath": "$.globals",
+      "Default": "Finish"
+    },
+    "Finish": {
+      "Comment": "Table re-creation succeeded, send notification",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email",
+        "Subject": "CSB parquet table updated",
+        "Message.$": "States.Format('Table {} has been re-created', $.PARQUET_TABLE)"
+      },
+      "Type": "Task",
+      "End": true
+    }
+  }
+}

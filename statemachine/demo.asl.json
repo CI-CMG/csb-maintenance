@@ -1,0 +1,29 @@
+{
+  "Comment": "placeholder state machine for testing execution and error handling",
+  "StartAt": "Pass",
+  "States": {
+    "Pass": {
+      "Type": "Pass",
+      "Next": "Choice"
+    },
+    "Choice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.globals.PARQUET_TABLE",
+            "StringEquals": "csb_parquet"
+          },
+          "Next": "Fail"
+        }
+      ],
+      "Default": "Success"
+    },
+    "Fail": {
+      "Type": "Fail"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}

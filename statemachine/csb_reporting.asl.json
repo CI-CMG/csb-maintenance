@@ -1,0 +1,305 @@
+{
+  "Comment": "Generate the summary data used by the CSB Dashboard",
+  "StartAt": "Parallel",
+  "States": {
+    "Parallel": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Construct Input Parameters",
+          "States": {
+            "Construct Input Parameters": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "OutputPath": "$.Payload",
+              "Parameters": {
+                "Payload": {
+                  "start_year": 2017
+                },
+                "FunctionName": "${FYCountsInputFunction}"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Map"
+            },
+            "Map": {
+              "Type": "Map",
+              "ItemProcessor": {
+                "ProcessorConfig": {
+                  "Mode": "INLINE"
+                },
+                "StartAt": "Execute FY Query",
+                "States": {
+                  "Execute FY Query": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+                    "Parameters": {
+                      "QueryString.$": "States.Format('SELECT count(*) as {} FROM csb_parquet where entry_date >= date \\'{}\\' and entry_date <= date \\'{}\\'', $.name, $.start, $.end)",
+                      "WorkGroup": "primary",
+                      "ResultConfiguration": {
+                        "OutputLocation": "s3://csb-pilot-delivery/"
+                      }
+                    },
+                    "Next": "Get FY Query Results"
+                  },
+                  "Get FY Query Results": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:getQueryResults",
+                    "Parameters": {
+                      "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+                    },
+                    "ResultSelector": {
+                      "label.$": "$.ResultSet.Rows[0].Data[0].VarCharValue",
+                      "count.$": "$.ResultSet.Rows[1].Data[0].VarCharValue"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "ResultSelector": {
+                "fy_counts.$": "$"
+              },
+              "ItemsPath": "$.years",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Count Total Points",
+          "States": {
+            "Count Total Points": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString.$": "States.Format('SELECT count(*) as record_count FROM {}', $.TableName)",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://csb-pilot-delivery/"
+                }
+              },
+              "Next": "Get Total Count Results"
+            },
+            "Get Total Count Results": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:getQueryResults",
+              "Parameters": {
+                "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+              },
+              "ResultSelector": {
+                "record_count.$": "$.ResultSet.Rows[1].Data[0].VarCharValue"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Counts by Year",
+          "States": {
+            "Counts by Year": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString.$": "States.Format('select date_trunc(\\'year\\', entry_date) as year,provider,count(*) from {} group by 1,2 order by 1,3 desc', $.TableName)",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://csb-pilot-delivery/"
+                }
+              },
+              "Next": "Get Counts by Year Results"
+            },
+            "Get Counts by Year Results": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:getQueryResults",
+              "Parameters": {
+                "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+              },
+              "ResultSelector": {
+                "counts_by_year.$": "$.ResultSet.Rows[1:]"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Counts by Month",
+          "States": {
+            "Counts by Month": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString.$": "States.Format('select date_trunc(\\'month\\', entry_date) as month,count(*) from {} group by 1 order by 1', $.TableName)",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://csb-pilot-delivery/"
+                }
+              },
+              "Next": "Get Count by Month Results"
+            },
+            "Get Count by Month Results": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:getQueryResults",
+              "Parameters": {
+                "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+              },
+              "ResultSelector": {
+                "counts_by_month.$": "$.ResultSet.Rows[1:]"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Min/Max Entry Date",
+          "States": {
+            "Min/Max Entry Date": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString.$": "States.Format('select min(entry_date) as min_entry_date, max(entry_date) as max_entry_date from {}', $.TableName)",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://csb-pilot-delivery/"
+                }
+              },
+              "Next": "Get Min/Max Entry Date Results"
+            },
+            "Get Min/Max Entry Date Results": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:getQueryResults",
+              "Parameters": {
+                "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+              },
+              "ResultSelector": {
+                "min_entry_date.$": "$.ResultSet.Rows[1].Data[0].VarCharValue",
+                "max_entry_date.$": "$.ResultSet.Rows[1].Data[1].VarCharValue"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Counts by Provider",
+          "States": {
+            "Counts by Provider": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString.$": "States.Format('select provider, count(*) from {} group by 1 order by 1', $.TableName)",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://csb-pilot-delivery/"
+                }
+              },
+              "Next": "Get Count by Provider Results"
+            },
+            "Get Count by Provider Results": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:getQueryResults",
+              "Parameters": {
+                "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+              },
+              "ResultSelector": {
+                "counts_by_provider.$": "$.ResultSet.Rows[1:]"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "execute count by h3 query",
+          "States": {
+            "execute count by h3 query": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "Payload.$": "$",
+                "FunctionName": "${CountByH3QueryFunction}"
+              },
+              "ResultSelector": {
+                "counts_by_h3.$": "$.Payload.QueryExecutionId"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true,
+              "Comment": "starts the Athena \"count by h3\" query but does not wait for completion "
+            }
+          }
+        },
+        {
+          "StartAt": "Count Requests",
+          "States": {
+            "Count Requests": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${CountBathyOrdersFunction}"
+              },
+              "ResultSelector": {
+                "order_count.$": "$.Payload"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "Update CSB Statistics"
+    },
+    "Update CSB Statistics": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${UpdateCsbStatisticsFunction}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    }
+  }
+}
