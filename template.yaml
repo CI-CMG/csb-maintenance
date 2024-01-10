@@ -19,33 +19,33 @@ Globals:
         ATHENA_QUERIES_TABLE: 'athena_queries'
 
 Resources:
-  HelloWorldFunction:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
-    Properties:
-      CodeUri: hello_world/
-      Handler: app.lambda_handler
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
-      Runtime: python3.9
-      Architectures:
-        - x86_64
-      Events:
-        TriggerEvent:
-          Type: ScheduleV2
-          Properties:
-            Description: execute state machine to drop and re-create the CSB parquet-format table
-            Name: !Sub '${AWS::StackName}-hello-world-trigger'
-            RoleArn: arn:aws:iam::282856304593:role/csb-cwevents-role
-            ScheduleExpression: rate(2 minutes)
-            State: ENABLED
-            Input: |-
-              {
-                "globals": {
-                  "ATHENA_DATABASE": "dcdb",
-                  "CSV_TABLE": "csb_h3",
-                  "PARQUET_TABLE": "csb_parquet",
-                  "S3_BUCKET": "dcdb-data"
-                }
-              }
+#  HelloWorldFunction:
+#    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+#    Properties:
+#      CodeUri: hello_world/
+#      Handler: app.lambda_handler
+#      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+#      Runtime: python3.9
+#      Architectures:
+#        - x86_64
+#      Events:
+#        TriggerEvent:
+#          Type: ScheduleV2
+#          Properties:
+#            Description: execute state machine to drop and re-create the CSB parquet-format table
+#            Name: !Sub '${AWS::StackName}-hello-world-trigger'
+#            RoleArn: arn:aws:iam::282856304593:role/csb-cwevents-role
+#            ScheduleExpression: rate(2 minutes)
+#            State: ENABLED
+#            Input: |-
+#              {
+#                "globals": {
+#                  "ATHENA_DATABASE": "dcdb",
+#                  "CSV_TABLE": "csb_h3",
+#                  "PARQUET_TABLE": "csb_parquet",
+#                  "S3_BUCKET": "dcdb-data"
+#                }
+#              }
 
   CountByH3ResultsFunction:
     Type: AWS::Serverless::Function
@@ -168,7 +168,7 @@ Resources:
 #
 # TODO athena_queries
 
-Outputs:
-  HelloWorldFunction:
-    Description: "Hello World Lambda Function ARN"
-    Value: !GetAtt HelloWorldFunction.Arn
+#Outputs:
+#  HelloWorldFunction:
+#    Description: "Hello World Lambda Function ARN"
+#    Value: !GetAtt HelloWorldFunction.Arn
