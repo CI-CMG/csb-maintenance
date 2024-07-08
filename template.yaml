@@ -3,20 +3,32 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   maintain and report on crowdsourced bathymetry resources
 
-# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+#
+# expects the following resources to be defined outside the template
+#   - IAM role:  arn:aws:iam::282856304593:role/csb-pilot-role
+#   - Athena database/table: dcdb.bathy-orders
+#   - Athena database/table: dcdb.csb_parquet
+#   - S3 bucket: aws-athena-query-results-282856304593-us-east-1
+#   - S3 bucket: order-pickup
+#   - SNS Topic: arn:aws:sns:us-east-1:282856304593:csb-email
+
 Globals:
   Function:
     Timeout: 3
     MemorySize: 128
+    Runtime: python3.9
+    Architectures:
+      - x86_64
+    Handler: app.lambda_handler
     Environment:
       Variables:
         LOGLEVEL: WARNING
         ORDERS_TABLE: 'bathy-orders'
         ATHENA_DATABASE: 'dcdb'
         ATHENA_TABLE: 'csb_parquet'
-        ATHENA_OUTPUT_BUCKET: 's3://order-pickup/'
-        ATHENA_INPUT_BUCKET: 'csb-pilot-delivery'
-        ATHENA_QUERIES_TABLE: 'athena_queries'
+        ATHENA_QUERIES_TABLE: !Ref QueryTrackingTable
+        DELIVERY_BUCKET_NAME: 'order-pickup'
+        ATHENA_RESULTS_BUCKET_NAME: 'aws-athena-query-results-282856304593-us-east-1'
 
 Resources:
 #  HelloWorldFunction:
@@ -51,18 +63,14 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: count_by_h3_results/
-      Handler: app.lambda_handler
       Role: arn:aws:iam::282856304593:role/csb-pilot-role
-      Runtime: python3.9
-      Architectures:
-        - x86_64
       Events:
         Trigger:
           Type: CloudWatchEvent
           Properties:
             Pattern:
               source:
-                - aws.Athena
+                - aws.athena
               detail-type:
                 - 'Athena Query State Change'
               detail:
@@ -74,41 +82,25 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: count_bathy_orders/
-      Handler: app.lambda_handler
       Role: arn:aws:iam::282856304593:role/csb-pilot-role
-      Runtime: python3.9
-      Architectures:
-        - x86_64
 
   CountByH3QueryFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: count_by_h3_query/
-      Handler: app.lambda_handler
       Role: arn:aws:iam::282856304593:role/csb-pilot-role
-      Runtime: python3.9
-      Architectures:
-        - x86_64
 
   FYCountsInputFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: fy_counts_input/
-      Handler: app.lambda_handler
       Role: arn:aws:iam::282856304593:role/csb-pilot-role
-      Runtime: python3.9
-      Architectures:
-        - x86_64
 
   UpdateCsbStatisticsFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: update_csb_statistics/
-      Handler: app.lambda_handler
       Role: arn:aws:iam::282856304593:role/csb-pilot-role
-      Runtime: python3.9
-      Architectures:
-        - x86_64
 
 #
 # Step Functions
@@ -124,11 +116,12 @@ Resources:
         CountByH3QueryFunction: !GetAtt CountByH3QueryFunction.Arn
         CountBathyOrdersFunction: !GetAtt CountBathyOrdersFunction.Arn
 
+
 # rebuild Parquet table statemachine
   CsbRebuildTableStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
-      DefinitionUri: statemachine/demo.asl.json
+      DefinitionUri: statemachine/rebuild_csb_table.asl.json
       Role: arn:aws:iam::282856304593:role/csb-pilot-role
       DefinitionSubstitutions:
         EmailSnsTopic: "arn:aws:sns:us-east-1:282856304593:csb-email"
@@ -142,7 +135,7 @@ Resources:
       Description: Rebuild the parquet-format CSB table by executing a state machine to drop and re-create the table
       EventBusName: default
       Name: !Sub '${AWS::StackName}-rebuild-csb-table-rule'
-      ScheduleExpression: rate(2 minutes)
+      ScheduleExpression: rate(2 days)
       State: ENABLED
       Targets:
         - Id: CsbRebuildTableStateMachine
@@ -160,15 +153,71 @@ Resources:
           RetryPolicy:
             MaximumRetryAttempts: 1
 
-#TODO trigger rebuild, summary stats step functions
+  GenerateCsbDataSummaryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: trigger the step function used to generate data for the CSB dashboard
+      EventBusName: default
+      Name: !Sub '${AWS::StackName}-csb-data-summary-rule'
+      ScheduleExpression: rate(2 days)
+      State: ENABLED
+      Targets:
+        - Id: CsbReportingStateMachine
+          Arn: !Ref CsbReportingStateMachine
+          RoleArn: arn:aws:iam::282856304593:role/csb-cwevents-role
+          Input: |-
+            {
+              "TableName": "dcdb.csb_parquet"
+            }
+          # TODO
+          # DeadLetterConfig:
+          #  Arn: arn:aws:sqs:us-east-1:282856304593:CsbSummaryResultsQueue
+          RetryPolicy:
+            MaximumRetryAttempts: 5
+
+#
+# SNS Topics
+#
+# TODO
+
+
+#
+# SQS Queues
+#
+# TODO
 
 
 #
 # Tables
 #
-# TODO athena_queries
+# associate the Athena QueryExecutionId with the StepFunction TaskToken
+  QueryTrackingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-queries'
+      TimeToLiveSpecification:
+        AttributeName: ttl,
+        Enabled: true
+      Tags:
+        - Key: 'stack-name'
+          Value: !Ref AWS::StackName
+        - Key: project
+          Value: bathymetry
 
-#Outputs:
-#  HelloWorldFunction:
-#    Description: "Hello World Lambda Function ARN"
-#    Value: !GetAtt HelloWorldFunction.Arn
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: label
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: label
+          KeyType: RANGE
+
+      BillingMode: PAY_PER_REQUEST
+
+Outputs:
+  QueryLookupTableName:
+    Value: !Ref QueryTrackingTable

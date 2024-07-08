@@ -8,7 +8,8 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOGLEVEL", "WARNING"))
 
-OUTPUT_BUCKET = os.getenv('ATHENA_OUTPUT_BUCKET')
+DELIVERY_BUCKET_NAME = os.getenv('DELIVERY_BUCKET_NAME')
+
 s3 = boto3.resource('s3')
 
 
@@ -122,10 +123,9 @@ def lambda_handler(event, context):
         if 'fy_counts' in i:
             result['fy_counts'] = i['fy_counts']
 
-    bucket_name = OUTPUT_BUCKET.strip('/').split('/')[-1]
-    output_bucket = s3.Bucket(bucket_name)
+    output_bucket = s3.Bucket(DELIVERY_BUCKET_NAME)
     obj_key = 'csb_statistics.json'
-    url = f"https://{bucket_name}.s3.amazonaws.com/{obj_key}"
+    url = f"https://{DELIVERY_BUCKET_NAME}.s3.amazonaws.com/{obj_key}"
     upload_data_to_s3(output_bucket, obj_key, json.dumps(result))
     return {
         'statusCode': 200,

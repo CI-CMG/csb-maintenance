@@ -14,19 +14,14 @@ import os
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOGLEVEL", "WARNING"))
 
-DATABASE = os.getenv('ATHENA_DATABASE')
-TABLE = os.getenv('ATHENA_TABLE')
-S3_OUTPUT = os.getenv('ATHENA_OUTPUT_BUCKET')
-
-QUERIES_TABLE = os.getenv('ATHENA_QUERIES_TABLE')
-OUTPUT_BUCKET = os.getenv('ATHENA_OUTPUT_BUCKET')
-INPUT_BUCKET = os.getenv('INPUT_BUCKET')
 QUERY_LABEL = os.getenv('QUERY_LABEL', default='CSB_H3_COUNT')
+DELIVERY_BUCKET_NAME = os.getenv('DELIVERY_BUCKET_NAME')
+ATHENA_RESULTS_BUCKET_NAME = os.getenv("ATHENA_RESULTS_BUCKET_NAME")
 
 athena = boto3.client('athena')
 dynamodb = boto3.resource('dynamodb')
 s3 = boto3.resource('s3')
-ddb_table = dynamodb.Table(QUERIES_TABLE)
+ddb_table = dynamodb.Table(os.getenv('ATHENA_QUERIES_TABLE'))
 
 
 def is_query_of_interest(queryid, label=QUERY_LABEL):
@@ -52,8 +47,10 @@ def lambda_handler(event, context):
 
     # convert the output CSV into JSON w/ standard name
     # WARNING: loads entire file into memory. may not scale for really large files
-    logger.info(f'reading s3://{INPUT_BUCKET}/{queryExecutionId}.csv...')
-    obj = s3.Object(INPUT_BUCKET, f'{queryExecutionId}.csv')
+    results_file = f'{queryExecutionId}.csv'
+    logger.info(f'reading s3://{ATHENA_RESULTS_BUCKET_NAME}/{results_file}...')
+    obj = s3.Object(ATHENA_RESULTS_BUCKET_NAME, results_file)
+    # TODO verify expected object exists
     lines = obj.get()['Body'].iter_lines()
     # skip first line (assumed to be header)
     next(lines)
@@ -71,17 +68,18 @@ def lambda_handler(event, context):
     logger.info(f'{"{:,}".format(len(records))} records processed')
 
     data_string = json.dumps({'counts_by_h3': records}, indent=2, default=str)
-    s3_resource = boto3.resource('s3')
-    s3_bucket = s3_resource.Bucket(name=OUTPUT_BUCKET)
+    # TODO create this only once, outside handler
+    s3_bucket = s3.Bucket(name=DELIVERY_BUCKET_NAME)
 
     s3_bucket.put_object(
         Key='csb_counts_by_h3.json',
         Body=data_string
     )
-    logger.info(f'output written to {OUTPUT_BUCKET}/csb_counts_by_h3.json')
+    logger.info(f'output written to {DELIVERY_BUCKET_NAME}/csb_counts_by_h3.json')
 
     # print(event)
 
+# Sample Event
 # {
 #     'version': '0',
 #     'id': 'ddd2dae3-39d2-7ebf-6066-38df6a7176bb',
@@ -101,3 +99,4 @@ def lambda_handler(event, context):
 #         'workgroupName': 'primary'
 #     }
 # }
+

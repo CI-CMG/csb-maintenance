@@ -12,18 +12,15 @@ import logging
 
 
 logger = logging.getLogger()
-logger.setLevel(os.environ.get("LOGLEVEL", "WARNING"))
+logger.setLevel(os.getenv("LOGLEVEL", "WARNING"))
 
 DATABASE = os.getenv('ATHENA_DATABASE')
-TABLE = os.getenv('ATHENA_TABLE')
-OUTPUT_BUCKET = os.getenv('ATHENA_OUTPUT_BUCKET')
-INPUT_BUCKET = os.getenv('ATHENA_INPUT_BUCKET')
-QUERIES_TABLE = os.getenv('ATHENA_QUERIES_TABLE')
-ATHENA_OUTPUT_LOCATION = f"s3://{OUTPUT_BUCKET}/"
+ATHENA_RESULTS_BUCKET = f's3://{os.getenv("ATHENA_RESULTS_BUCKET_NAME")}/'
+QUERY = f"select h3_hires, count(*) from {DATABASE}.{os.getenv('ATHENA_TABLE')} group by 1 order by 1"
+
 dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table(TABLE)
 athena = boto3.client('athena')
-queries_table = dynamodb.Table(QUERIES_TABLE)
+queries_table = dynamodb.Table(os.getenv('ATHENA_QUERIES_TABLE'))
 
 
 def insert_query_id(query_id, label='CSB_H3_COUNT'):
@@ -43,27 +40,17 @@ def insert_query_id(query_id, label='CSB_H3_COUNT'):
 
 
 def lambda_handler(event, context):
-    # print(event)
-
-    # Database specified in Execution Context below.
-    query = f"select h3_hires, count(*) from {DATABASE}.{TABLE} group by 1 order by 1"
-
-    # Execution
     response = athena.start_query_execution(
-        QueryString=query,
+        QueryString=QUERY,
         QueryExecutionContext={
             'Database': DATABASE
         },
         ResultConfiguration={
-            'OutputLocation': ATHENA_OUTPUT_LOCATION
+            'OutputLocation': ATHENA_RESULTS_BUCKET
         }
     )
-
-    # get query execution id
+    # store query reference to allow separate function to pickup results asynchronously
     query_execution_id = response['QueryExecutionId']
-    # print(response)
-    # query_status = athena.get_query_execution(QueryExecutionId=query_execution_id)
-    # query_execution_status = query_status['QueryExecution']['Status']['State']
     insert_query_id(query_id=query_execution_id)
 
     return response
