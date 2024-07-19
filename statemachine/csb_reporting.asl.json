@@ -14,7 +14,9 @@
               "OutputPath": "$.Payload",
               "Parameters": {
                 "Payload": {
-                  "start_year": 2017
+                  "start_year": 2017,
+                  "database": "${AthenaDatabase}",
+                  "table": "${AthenaTable}"
                 },
                 "FunctionName": "${FYCountsInputFunction}"
               },
@@ -45,7 +47,7 @@
                     "Type": "Task",
                     "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
                     "Parameters": {
-                      "QueryString.$": "States.Format('SELECT count(*) as {} FROM csb_parquet where entry_date >= date \\'{}\\' and entry_date <= date \\'{}\\'', $.name, $.start, $.end)",
+                      "QueryString.$": "States.Format('SELECT count(*) as {} FROM {} where entry_date >= date \\'{}\\' and entry_date <= date \\'{}\\'', $.name, $.table, $.start, $.end)",
                       "WorkGroup": "primary"
                     },
                     "Next": "Get FY Query Results"
