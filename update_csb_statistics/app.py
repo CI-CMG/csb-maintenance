@@ -1,6 +1,8 @@
 import json
 from datetime import date
 import io
+from typing import Any
+
 import boto3
 import os
 import logging
@@ -100,7 +102,8 @@ def format_counts(stats):
 
 def lambda_handler(event, context):
     # print(event)
-    result = {'report_date': date.today().isoformat()}
+    result: dict[Any, Any] = {}
+    result['report_date'] = date.today().isoformat()
     for i in event:
         # if 'counts_by_month' in i:
         #     result['counts_by_month'] = format_counts(i['counts_by_month'])
