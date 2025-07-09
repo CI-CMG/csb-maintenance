@@ -5,12 +5,25 @@ Description: >
 
 #
 # expects the following resources to be defined outside the template
-#   - IAM role:  arn:aws:iam::282856304593:role/csb-pilot-role
+#   - IAM role: arn:aws:iam::282856304593:role/csb-maintenance-sfn-role
+#   - IAM role: arn:aws:iam::282856304593:role/csb-maintenance-lambda-role
 #   - Athena database/table: dcdb.bathy-orders
 #   - Athena database/table: dcdb.csb_parquet
 #   - S3 bucket: aws-athena-query-results-282856304593-us-east-1
 #   - S3 bucket: order-pickup
 #   - SNS Topic: arn:aws:sns:us-east-1:282856304593:csb-email
+Parameters:
+  ExecutionRole:
+    Default: arn:aws:iam::282856304593:role/csb-maintenance-lambda-role
+    Type: String
+
+  SfnRole:
+    Default: arn:aws:iam::282856304593:role/csb-maintenance-sfn-role
+    Type: String
+
+  RebuildTableSfnRole:
+    Default: arn:aws:iam::282856304593:role/csb-rebuild-table-sfn-role
+    Type: String
 
 Globals:
   Function:
@@ -29,6 +42,7 @@ Globals:
         ATHENA_QUERIES_TABLE: !Ref QueryTrackingTable
         DELIVERY_BUCKET_NAME: 'order-pickup'
         ATHENA_RESULTS_BUCKET_NAME: 'aws-athena-query-results-282856304593-us-east-1'
+        EXECUTION_ROLE: !Ref ExecutionRole
 
 Resources:
 #  HelloWorldFunction:
@@ -63,7 +77,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: count_by_h3_results/
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+      Role: !Ref ExecutionRole
       Events:
         Trigger:
           Type: CloudWatchEvent
@@ -82,25 +96,43 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: count_bathy_orders/
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+      Role: !Ref ExecutionRole
 
   CountByH3QueryFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: count_by_h3_query/
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+      Role: !Ref ExecutionRole
 
   FYCountsInputFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: fy_counts_input/
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+      Role: !Ref ExecutionRole
 
   UpdateCsbStatisticsFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: update_csb_statistics/
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+      Role: !Ref ExecutionRole
+
+  UpdateCsbProviderStatisticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: update_csb_provider_statistics/
+      Role: !Ref ExecutionRole
+
+  ConstructCreateTableQueryStringFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: construct_create_table_query_string/
+      Role: !Ref ExecutionRole
+
+  DeleteParquetFilesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: delete_parquet_files/
+      Role: !Ref ExecutionRole
 
 #
 # Step Functions
@@ -109,12 +141,20 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       DefinitionUri: statemachine/csb_reporting.asl.json
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+      Role: !Ref SfnRole
       DefinitionSubstitutions:
         UpdateCsbStatisticsFunction: !GetAtt UpdateCsbStatisticsFunction.Arn
         FYCountsInputFunction: !GetAtt FYCountsInputFunction.Arn
         CountByH3QueryFunction: !GetAtt CountByH3QueryFunction.Arn
         CountBathyOrdersFunction: !GetAtt CountBathyOrdersFunction.Arn
+
+  CsbProviderReportingStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/csb_provider_reporting.asl.json
+      Role: !Ref SfnRole
+      DefinitionSubstitutions:
+        UpdateCsbProviderStatisticsFunction: !GetAtt UpdateCsbProviderStatisticsFunction.Arn
 
 
 # rebuild Parquet table statemachine
@@ -122,9 +162,11 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       DefinitionUri: statemachine/rebuild_csb_table.asl.json
-      Role: arn:aws:iam::282856304593:role/csb-pilot-role
+      Role: !Ref RebuildTableSfnRole
       DefinitionSubstitutions:
         EmailSnsTopic: "arn:aws:sns:us-east-1:282856304593:csb-email"
+        DeleteParquetFilesFunction: !GetAtt DeleteParquetFilesFunction.Arn
+        ConstructTableQueryStringFunction: !GetAtt ConstructCreateTableQueryStringFunction.Arn
 
 #
 # EventBridge Rules
@@ -175,6 +217,27 @@ Resources:
           RetryPolicy:
             MaximumRetryAttempts: 5
 
+  GenerateCsbProviderSummaryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: trigger the step function used to generate data for the CSB Providers Dashboard
+      EventBusName: default
+      Name: !Sub '${AWS::StackName}-csb-providers-summary-rule'
+      ScheduleExpression: rate(2 days)
+      State: ENABLED
+      Targets:
+        - Id: CsbReportingStateMachine
+          Arn: !Ref CsbProviderReportingStateMachine
+          RoleArn: arn:aws:iam::282856304593:role/csb-cwevents-role
+          Input: |-
+            {
+              "TableName": "dcdb.csb_parquet"
+            }
+          # TODO
+          # DeadLetterConfig:
+          #  Arn: arn:aws:sqs:us-east-1:282856304593:CsbSummaryResultsQueue
+          RetryPolicy:
+            MaximumRetryAttempts: 3
 #
 # SNS Topics
 #
