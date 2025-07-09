@@ -1,0 +1,214 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Query for List of Providers",
+  "States": {
+    "Query for List of Providers": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Arguments": {
+        "QueryString": "select distinct(provider) from dcdb.csb_parquet order by provider",
+        "WorkGroup": "primary"
+      },
+      "Next": "Format List of Providers"
+    },
+    "Format List of Providers": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:getQueryResults",
+      "Arguments": {
+        "QueryExecutionId": "{% $states.input.QueryExecution.QueryExecutionId %}"
+      },
+      "Output": {
+        "Providers": "{% $map($states.result.ResultSet.Rows, function($v) { $v.Data.VarCharValue })[[1..99]] %}"
+      },
+      "Next": "Foreach Provider"
+    },
+    "Foreach Provider": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "Parallel Execution of Queries for Each Provider",
+        "States": {
+          "Parallel Execution of Queries for Each Provider": {
+            "Type": "Parallel",
+            "Next": "Summarize Provider Results",
+            "Branches": [
+              {
+                "StartAt": "Query for Date Range",
+                "States": {
+                  "Query for Date Range": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+                    "Arguments": {
+                      "QueryString": "select count(*) as record_count, count(distinct platform_name) as platform_count, min(entry_date) as min_time, max(entry_date) as max_time from dcdb.csb_parquet where provider = ?",
+                      "ExecutionParameters": [
+                        "{% $states.input %}"
+                      ],
+                      "WorkGroup": "primary"
+                    },
+                    "Next": "Date Range Results",
+                    "Assign": {
+                      "Provider": "{% $states.input %}"
+                    }
+                  },
+                  "Date Range Results": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:getQueryResults",
+                    "Arguments": {
+                      "QueryExecutionId": "{% $states.input.QueryExecution.QueryExecutionId %}"
+                    },
+                    "Output": {
+                      "RecordCount": "{% $states.result.ResultSet.Rows[1].Data[0].VarCharValue %}",
+                      "PlatformCount": "{% $states.result.ResultSet.Rows[1].Data[1].VarCharValue %}",
+                      "MinDateTime": "{% $states.result.ResultSet.Rows[1].Data[2].VarCharValue %}",
+                      "MaxDateTime": "{% $states.result.ResultSet.Rows[1].Data[3].VarCharValue %}"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              {
+                "StartAt": "Query for Platform Counts",
+                "States": {
+                  "Query for Platform Counts": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+                    "Arguments": {
+                      "QueryString": "select count(*) as record_count, platform_name, min(entry_date) as first_submission, max(entry_date) as last_submission from dcdb.csb_parquet where provider = ? group by platform_name order by 1 desc",
+                      "ExecutionParameters": [
+                        "{% $states.input %}"
+                      ],
+                      "WorkGroup": "primary"
+                    },
+                    "Next": "Platform Count Results",
+                    "Assign": {
+                      "Provider": "{% $states.input %}"
+                    }
+                  },
+                  "Platform Count Results": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:getQueryResults",
+                    "Arguments": {
+                      "QueryExecutionId": "{% $states.input.QueryExecution.QueryExecutionId %}"
+                    },
+                    "Output": {
+                      "Results": "{% $map($states.result.ResultSet.Rows, function($v, $i) { { 'Platform': $v.Data[1].VarCharValue, 'Count': $v.Data[0].VarCharValue, 'FirstSubmission': $v.Data[2].VarCharValue, 'LastSubmission': $v.Data[3].VarCharValue } }) %}"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              {
+                "StartAt": "Query for Monthly Counts",
+                "States": {
+                  "Query for Monthly Counts": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+                    "Arguments": {
+                      "QueryString": " select count(*) as record_count, date_trunc('month', entry_date) as month from dcdb.csb_parquet where provider = ? group by date_trunc('month', entry_date) order by 2 desc",
+                      "ExecutionParameters": [
+                        "{% $states.input %}"
+                      ],
+                      "WorkGroup": "primary"
+                    },
+                    "Next": "Monthly Count Results",
+                    "Assign": {
+                      "Provider": "{% $states.input %}"
+                    }
+                  },
+                  "Monthly Count Results": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:getQueryResults",
+                    "Arguments": {
+                      "QueryExecutionId": "{% $states.input.QueryExecution.QueryExecutionId %}"
+                    },
+                    "Output": {
+                      "Results": "{% $map($states.result.ResultSet.Rows, function($v, $i) { { 'Month': $v.Data[1].VarCharValue, 'Count': $v.Data[0].VarCharValue } }) %}"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              {
+                "StartAt": "Query for Active Provider",
+                "States": {
+                  "Query for Active Provider": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+                    "Arguments": {
+                      "QueryString": "select (count(*) > 0) as ActiveProvider from dcdb.csb_parquet where entry_date >= (current_date - interval '30' day) and provider = ?",
+                      "ExecutionParameters": [
+                        "{% $states.input %}"
+                      ],
+                      "WorkGroup": "primary"
+                    },
+                    "Next": "Active Provider Results",
+                    "Assign": {
+                      "Provider": "{% $states.input %}"
+                    }
+                  },
+                  "Active Provider Results": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::athena:getQueryResults",
+                    "Arguments": {
+                      "QueryExecutionId": "{% $states.input.QueryExecution.QueryExecutionId %}"
+                    },
+                    "Output": {
+                      "ActiveProvider": "{% $states.result.ResultSet.Rows[1].Data[0].VarCharValue %}"
+                    },
+                    "End": true
+                  }
+                }
+              }
+            ],
+            "Assign": {
+              "Provider": "{% $states.input %}"
+            }
+          },
+          "Summarize Provider Results": {
+            "Type": "Pass",
+            "End": true,
+            "Output": {
+              "Provider": "{% $Provider %}",
+              "RecordCount": "{% $states.input[0].RecordCount %}",
+              "PlatformCount": "{% $states.input[0].PlatformCount %}",
+              "MinDateTime": "{% $states.input[0].MinDateTime %}",
+              "MaxDateTime": "{% $states.input[0].MaxDateTime %}",
+              "PlatformCounts": "{% $states.input[1].Results %}",
+              "MonthlyCounts": "{% $states.input[2].Results %}",
+              "ActiveProvider": "{% $states.input[3].ActiveProvider %}"
+            }
+          }
+        }
+      },
+      "Items": "{% $states.input.Providers %}",
+      "Next": "Summarize All Providers"
+    },
+    "Summarize All Providers": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "${UpdateCsbProviderStatisticsFunction}",
+        "Payload": "{% $states.input %}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "End": true
+    }
+  },
+  "QueryLanguage": "JSONata"
+}
