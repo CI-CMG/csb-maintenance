@@ -36,7 +36,7 @@
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "Message.$": "$",
-        "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email"
+        "TopicArn": "${EmailSnsTopic}"
       },
       "Next": "QueryFailed",
       "Comment": "Notify administrator of failure via email"
@@ -52,7 +52,7 @@
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "Payload.$": "$",
-        "FunctionName": "arn:aws:lambda:us-east-1:282856304593:function:deleteParquetFiles:$LATEST"
+        "FunctionName": "${DeleteParquetFilesFunction}"
       },
       "Retry": [
         {
@@ -75,7 +75,7 @@
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "Payload.$": "$",
-        "FunctionName": "arn:aws:lambda:us-east-1:282856304593:function:constructCreateTableQueryString:$LATEST"
+        "FunctionName": "${ConstructTableQueryStringFunction}"
       },
       "Retry": [
         {
@@ -129,7 +129,7 @@
       "Comment": "Table re-creation succeeded, send notification",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
-        "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email",
+        "TopicArn": "${EmailSnsTopic}",
         "Subject": "CSB parquet table updated",
         "Message.$": "States.Format('Table {} has been re-created', $.PARQUET_TABLE)"
       },
