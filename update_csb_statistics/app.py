@@ -94,10 +94,8 @@ def format_annual_counts(stats):
 
 
 def format_counts(stats):
-    return dict(zip(
-        [i['Data'][0]['VarCharValue'] for i in stats],
-        [i['Data'][1]['VarCharValue'] for i in stats]
-    ))
+    # create a list of objects, one per provider
+    return [ {'provider': i['Data'][0]['VarCharValue'], 'count': int(i['Data'][1]['VarCharValue']) } for i in stats]
 
 
 def lambda_handler(event, context):
@@ -109,7 +107,7 @@ def lambda_handler(event, context):
         if 'counts_by_year' in i:
             result['counts_by_year'] = format_annual_counts(i['counts_by_year'])
         if 'record_count' in i:
-            result['record_count'] = i['record_count']
+            result['record_count'] = int(i['record_count'])
         if 'min_entry_date' in i:
             result['min_entry_date'] = i['min_entry_date']
         if 'max_entry_date' in i:
@@ -121,7 +119,7 @@ def lambda_handler(event, context):
         if 'order_count' in i:
             result['order_count'] = i['order_count']
         if 'fy_counts' in i:
-            result['fy_counts'] = i['fy_counts']
+            result['fy_counts'] = [{'count': int(it['count']), 'label': it['label']} for it in i['fy_counts'] ]         
 
     output_bucket = s3.Bucket(DELIVERY_BUCKET_NAME)
     obj_key = 'csb_statistics.json'
