@@ -134,6 +134,12 @@ Resources:
       CodeUri: delete_parquet_files/
       Role: !Ref ExecutionRole
 
+  WritePlatformStatisticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: write_platform_statistics/
+      Role: !Ref ExecutionRole
+
 #
 # Step Functions
 #
@@ -155,6 +161,7 @@ Resources:
       Role: !Ref SfnRole
       DefinitionSubstitutions:
         UpdateCsbProviderStatisticsFunction: !GetAtt UpdateCsbProviderStatisticsFunction.Arn
+        WritePlatformStatisticsFunction: !GetAtt WritePlatformStatisticsFunction.Arn
 
 
 # rebuild Parquet table statemachine

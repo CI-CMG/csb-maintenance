@@ -41,7 +41,7 @@
                     "Type": "Task",
                     "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
                     "Arguments": {
-                      "QueryString": "select count(*) as record_count, count(distinct platform_name) as platform_count, min(entry_date) as min_time, max(entry_date) as max_time from dcdb.csb_parquet where provider = ?",
+                      "QueryString": "select count(*) as record_count, count(distinct unique_id) as platform_count, min(entry_date) as min_time, max(entry_date) as max_time, date(min(time)) as first_collection, date(max(time)) as last_collection, min(entry_date) as first_submission, max(entry_date) as last_submission from dcdb.csb_parquet where provider = ?",
                       "ExecutionParameters": [
                         "{% $states.input %}"
                       ],
@@ -62,7 +62,11 @@
                       "RecordCount": "{% $states.result.ResultSet.Rows[1].Data[0].VarCharValue %}",
                       "PlatformCount": "{% $states.result.ResultSet.Rows[1].Data[1].VarCharValue %}",
                       "MinDateTime": "{% $states.result.ResultSet.Rows[1].Data[2].VarCharValue %}",
-                      "MaxDateTime": "{% $states.result.ResultSet.Rows[1].Data[3].VarCharValue %}"
+                      "MaxDateTime": "{% $states.result.ResultSet.Rows[1].Data[3].VarCharValue %}",
+                      "FirstCollection": "{% $states.result.ResultSet.Rows[1].Data[4].VarCharValue %}",
+                      "LastCollection": "{% $states.result.ResultSet.Rows[1].Data[5].VarCharValue %}",
+                      "FirstSubmission": "{% $states.result.ResultSet.Rows[1].Data[6].VarCharValue %}",
+                      "LastSubmission": "{% $states.result.ResultSet.Rows[1].Data[7].VarCharValue %}"
                     },
                     "End": true
                   }
@@ -75,7 +79,7 @@
                     "Type": "Task",
                     "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
                     "Arguments": {
-                      "QueryString": "select count(*) as record_count, platform_name, min(entry_date) as first_submission, max(entry_date) as last_submission from dcdb.csb_parquet where provider = ? group by platform_name order by 1 desc",
+                      "QueryString": "select count(*) as record_count, platform_name, unique_id, date(min(time)) as first_collection, date(max(time)) as last_collection, min(entry_date) as first_submission, max(entry_date) as last_submission from dcdb.csb_parquet where provider = ? group by unique_id, platform_name order by 1 desc, 3 asc, 2 asc;",
                       "ExecutionParameters": [
                         "{% $states.input %}"
                       ],
@@ -93,8 +97,37 @@
                       "QueryExecutionId": "{% $states.input.QueryExecution.QueryExecutionId %}"
                     },
                     "Output": {
-                      "Results": "{% $map($states.result.ResultSet.Rows, function($v, $i) { { 'Platform': $v.Data[1].VarCharValue, 'Count': $v.Data[0].VarCharValue, 'FirstSubmission': $v.Data[2].VarCharValue, 'LastSubmission': $v.Data[3].VarCharValue } }) %}"
+                      "Results": "{% $map($states.result.ResultSet.Rows, function($v, $i) { {'UniqueId':$v.Data[2].VarCharValue,'Platform': $v.Data[1].VarCharValue,'Count':$v.Data[0].VarCharValue,'FirstCollection':$v.Data[3].VarCharValue,'LastCollection':$v.Data[4].VarCharValue,'FirstSubmission':$v.Data[5].VarCharValue,'LastSubmission': $v.Data[6].VarCharValue } }) %}"
                     },
+                    "Next": "Write Out Platform Counts"
+                  },
+                  "Write Out Platform Counts": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Output": {
+                      "url": "{% $states.result.Payload.output_url %}"
+                    },
+                    "Arguments": {
+                      "FunctionName": "${WritePlatformStatisticsFunction}",
+                      "Payload": {
+                        "Provider": "{% $Provider %}",
+                        "Results": "{% $states.input.Results %}"
+                      }
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "Lambda.ServiceException",
+                          "Lambda.AWSLambdaException",
+                          "Lambda.SdkClientException",
+                          "Lambda.TooManyRequestsException"
+                        ],
+                        "IntervalSeconds": 1,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2,
+                        "JitterStrategy": "FULL"
+                      }
+                    ],
                     "End": true
                   }
                 }
@@ -175,7 +208,11 @@
               "PlatformCount": "{% $states.input[0].PlatformCount %}",
               "MinDateTime": "{% $states.input[0].MinDateTime %}",
               "MaxDateTime": "{% $states.input[0].MaxDateTime %}",
-              "PlatformCounts": "{% $states.input[1].Results %}",
+              "FirstCollection": "{% $states.input[0].FirstCollection %}",
+              "LastCollection": "{% $states.input[0].LastCollection %}",
+              "FirstSubmission": "{% $states.input[0].FirstSubmission %}",
+              "LastSubmission": "{% $states.input[0].LastSubmission %}",
+              "PlatformCounts": "{% $states.input[1].url %}",
               "MonthlyCounts": "{% $states.input[2].Results %}",
               "ActiveProvider": "{% $states.input[3].ActiveProvider %}"
             }

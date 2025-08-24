@@ -1,3 +1,6 @@
+"""
+assemble and write out JSON file used by webapp
+"""
 import json
 from datetime import date
 import io
@@ -12,10 +15,6 @@ DELIVERY_BUCKET_NAME = os.getenv('DELIVERY_BUCKET_NAME')
 
 s3 = boto3.resource('s3')
 
-
-# output produced by parallel task is formatted a bit weird so separate into more
-# usable data structures
-
 def upload_data_to_s3(bucket, obj_key, data):
     with io.BytesIO() as f:
         for line in data:
@@ -24,8 +23,15 @@ def upload_data_to_s3(bucket, obj_key, data):
         bucket.upload_fileobj(f, obj_key)
 
 
+def get_platform_data(bucket, obj_key):
+    obj = s3.Object(bucket, obj_key)
+    file_content = obj.get()['Body'].read().decode('utf-8')
+    platform_data = json.loads(file_content)
+    return platform_data['platforms']
+
+
 def lambda_handler(event, context):
-    print(event)
+    # print(event)
 
     # initialize results dictionary
     result = {'report_date': date.today().isoformat(), 'providers': []}
@@ -41,14 +47,17 @@ def lambda_handler(event, context):
                 'Provider': i['Provider'],
                 'TotalSoundings': int(i['RecordCount']),
                 'PlatformCount': int(i['PlatformCount']),
+                # MinDate, MaxDate deprecated
                 'MinDate': i['MinDateTime'].split()[0],
                 'MaxDate': i['MaxDateTime'].split()[0],
+                'FirstCollection': i['FirstCollection'].split()[0],
+                'LastCollection': i['LastCollection'].split()[0],
+                'FirstSubmission': i['FirstSubmission'].split()[0],
+                'LastSubmission': i['LastSubmission'].split()[0],
                 # strip out header and truncate DateTimeString to yyyy-mm-dd
                 'MonthlyCounts': [{'Month': x['Month'].split()[0], 'Count': int(x['Count'])} for x in
                                   i['MonthlyCounts'][1:]],
-                'PlatformCounts': [
-                    {'Platform': x['Platform'], 'Count': int(x['Count']), 'FirstSubmission': x['FirstSubmission'],
-                     'LastSubmission': x['LastSubmission']} for x in i['PlatformCounts'][1:]],
+                'PlatformCounts': get_platform_data(DELIVERY_BUCKET_NAME, i['PlatformCounts'].split('/')[-1]),
                 'ActiveProvider': i['ActiveProvider'].strip().lower() == "true"
             }
         )
