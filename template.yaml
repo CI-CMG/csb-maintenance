@@ -9,6 +9,8 @@ Description: >
 #   - IAM role: arn:aws:iam::282856304593:role/csb-maintenance-lambda-role
 #   - Athena database/table: dcdb.bathy-orders
 #   - Athena database/table: dcdb.csb_parquet
+#   - Athena database/table: dcdb.csb_h3_part
+#   - DynamoDB table: csb-dirty-partitions
 #   - S3 bucket: aws-athena-query-results-282856304593-us-east-1
 #   - S3 bucket: order-pickup
 #   - SNS Topic: arn:aws:sns:us-east-1:282856304593:csb-email
@@ -37,6 +39,8 @@ Globals:
       Variables:
         LOGLEVEL: WARNING
         ORDERS_TABLE: 'bathy-orders'
+        DIRTY_PARTITIONS_TABLE: 'csb-dirty-partitions'
+        CSV_TABLE: 'csb_h3'
         ATHENA_DATABASE: 'dcdb'
         ATHENA_TABLE: 'csb_parquet'
         ATHENA_QUERIES_TABLE: !Ref QueryTrackingTable
@@ -72,6 +76,22 @@ Resources:
 #                  "S3_BUCKET": "dcdb-data"
 #                }
 #              }
+
+  BuildPartitionInsertQueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: build_partition_insert_string/
+      Role: !Ref ExecutionRole
+
+  DeletePartitionFilesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: delete_partition_files/
+      Role: !Ref ExecutionRole
+      Environment:
+        Variables:
+          PARTITION_PATH: 'csb/parquet/csb_h3_part/'
+          BUCKET_NAME: 'dcdb-data'
 
   CountByH3ResultsFunction:
     Type: AWS::Serverless::Function
@@ -174,6 +194,17 @@ Resources:
         EmailSnsTopic: "arn:aws:sns:us-east-1:282856304593:csb-email"
         DeleteParquetFilesFunction: !GetAtt DeleteParquetFilesFunction.Arn
         ConstructTableQueryStringFunction: !GetAtt ConstructCreateTableQueryStringFunction.Arn
+
+# rebuild individual Parquet partitions statemachine
+  CsbUpdatePartitionsStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/update_partitions.asl.json
+      Role: !Ref SfnRole
+      DefinitionSubstitutions:
+        EmailSnsTopic: "arn:aws:sns:us-east-1:282856304593:csb-email"
+        DeletePartitionFilesFunction: !GetAtt DeletePartitionFilesFunction.Arn
+        BuildPartitionInsertQueryFunction: !GetAtt BuildPartitionInsertQueryFunction.Arn
 
 #
 # EventBridge Rules

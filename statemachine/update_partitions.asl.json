@@ -1,0 +1,187 @@
+{
+  "Comment": "Update all modified CSB partitions",
+  "StartAt": "get all partition records",
+  "States": {
+    "get all partition records": {
+      "Type": "Task",
+      "Arguments": {
+        "TableName": "csb-dirty-partitions-test"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
+      "Next": "Foreach partition name",
+      "Assign": {
+        "inputPayload": "{% $states.context.Execution.Input %}",
+        "dirtyPartitions": "{% [$states.result.Items.PK.S] %}"
+      },
+      "Output": "{% [$states.result.Items.PK.S] %}",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "General Failure"
+        }
+      ]
+    },
+    "Foreach partition name": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "setup and validate",
+        "States": {
+          "setup and validate": {
+            "Type": "Pass",
+            "Next": "Drop Partition",
+            "Assign": {
+              "partitionName": "{% $states.input %}",
+              "dropPartitionStmt": "{% 'ALTER TABLE ' & $states.context.Execution.Input.TableName & \" DROP IF EXISTS PARTITION (h3 = '\" & $states.input & \"')\" %}"
+            },
+            "Comment": "set variable for this iteration's partition name so each state w/in Map state will not have to pass it"
+          },
+          "Drop Partition": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+            "Arguments": {
+              "QueryString": "{% $dropPartitionStmt %}",
+              "WorkGroup": "primary"
+            },
+            "Next": "Drop Partition Succeded?"
+          },
+          "Drop Partition Succeded?": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Next": "Send failure notification",
+                "Condition": "{% $states.input.QueryExecution.Status.State != 'SUCCEEDED'%}"
+              }
+            ],
+            "Default": "Delete Parquet Objects",
+            "Output": {
+              "Status": "{% $states.input.QueryExecution.Status.State %}"
+            }
+          },
+          "Send failure notification": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Arguments": {
+              "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email",
+              "Message": "{% 'Error: unable to re-create partition ' & $partitionName %}",
+              "Subject": "Error re-creating partition"
+            },
+            "Next": "Single Partition Failure"
+          },
+          "Single Partition Failure": {
+            "Type": "Fail"
+          },
+          "Delete Parquet Objects": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+            "Arguments": {
+              "FunctionName": "${DeletePartitionFilesFunction}",
+              "Payload": {
+                "partition": "{% $partitionName %}",
+                "taskToken": "{% $states.context.Task.Token %}"
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2,
+                "JitterStrategy": "FULL"
+              }
+            ],
+            "Next": "remove partition record"
+          },
+          "remove partition record": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:deleteItem",
+            "Arguments": {
+              "TableName": "csb-dirty-partitions-test",
+              "Key": {
+                "PK": {
+                  "S": "{% $partitionName %}"
+                }
+              }
+            },
+            "Output": {
+              "partition": "{% $partitionName %}"
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "Build Query String",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "error within a given partition update",
+          "Next": "General Failure"
+        }
+      ]
+    },
+    "Build Query String": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "${BuildPartitionInsertQueryFunction}",
+        "Payload": {
+          "tablename": "{% $states.context.Execution.Input.TableName %}",
+          "partitions": "{% $dirtyPartitions %}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Re-populate affected partitions"
+    },
+    "Re-populate affected partitions": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution",
+      "Arguments": {
+        "QueryString": "{% $states.input.query_string %}",
+        "WorkGroup": "primary"
+      },
+      "Next": "Send success notification"
+    },
+    "Send success notification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email",
+        "Message": "{% 'Successfully re-created ' & $count($dirtyPartitions) & ' partitions' %}",
+        "Subject": "Success re-creating partitions"
+      },
+      "Next": "Success"
+    },
+    "General Failure": {
+      "Type": "Fail"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  },
+  "QueryLanguage": "JSONata"
+}
