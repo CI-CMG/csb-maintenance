@@ -19,9 +19,19 @@
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Next": "General Failure"
+          "Next": "Send general failure notification"
         }
       ]
+    },
+    "Send general failure notification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email",
+        "Message": "{% 'Failed to re-create partitions' %}",
+        "Subject": "Failure re-creating partitions"
+      },
+      "Next": "General Failure"
     },
     "Foreach partition name": {
       "Type": "Map",
@@ -126,7 +136,7 @@
             "States.ALL"
           ],
           "Comment": "error within a given partition update",
-          "Next": "General Failure"
+          "Next": "Send general failure notification"
         }
       ]
     },
@@ -159,19 +169,41 @@
     },
     "Re-populate affected partitions": {
       "Type": "Task",
-      "Resource": "arn:aws:states:::athena:startQueryExecution",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
       "Arguments": {
         "QueryString": "{% $states.input.query_string %}",
         "WorkGroup": "primary"
       },
-      "Next": "Send success notification"
+      "Next": "Athena GetQueryResults",
+      "Assign": {
+        "TotalExecutionTimeInMillis": "{% $states.result.QueryExecution.Statistics.TotalExecutionTimeInMillis %}",
+        "DataScannedInBytes": "{% $states.result.QueryExecution.Statistics.DataScannedInBytes %}"
+      }
+    },
+    "Athena GetQueryResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:getQueryResults",
+      "Arguments": {
+        "QueryExecutionId": "{% $states.input.QueryExecution.QueryExecutionId %}"
+      },
+      "Next": "Re-populate partitions succeeded?"
+    },
+    "Re-populate partitions succeeded?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Next": "Send general failure notification",
+          "Condition": "{% $states.input.QueryExecution.Status.State != 'SUCCEEDED'%}"
+        }
+      ],
+      "Default": "Send success notification"
     },
     "Send success notification": {
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Arguments": {
         "TopicArn": "arn:aws:sns:us-east-1:282856304593:csb-email",
-        "Message": "{% 'Successfully re-created ' & $count($dirtyPartitions) & ' partitions' %}",
+        "Message": "{% 'Successfully re-created ' & $count($dirtyPartitions) & ' partition(s).  Execution time was ' & ( $totalSeconds := $floor($TotalExecutionTimeInMillis / 1000);\n  $minutes := $floor($totalSeconds / 60); $seconds := $totalSeconds % 60; $formatNumber($minutes, '00') & ':' & $formatNumber($seconds, '00') &  '.' & $TotalExecutionTimeInMillis % 1000) & ' minutes.  ' & $round($DataScannedInBytes/1000000000, 2) & ' GB were scanned and ' & $states.input.UpdateCount & ' records were inserted into the ' & $inputPayload.TableName & ' table.' %}",
         "Subject": "Success re-creating partitions"
       },
       "Next": "Success"
